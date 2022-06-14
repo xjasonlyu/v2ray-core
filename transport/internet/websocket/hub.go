@@ -8,7 +8,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -41,27 +40,18 @@ var upgrader = &websocket.Upgrader{
 }
 
 func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	var earlyData io.Reader
+	if !strings.HasPrefix(request.URL.Path, h.path) {
+		writer.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	var earlyDataStr string
 	if !h.earlyDataEnabled { // nolint: gocritic
-		if request.URL.Path != h.path {
-			writer.WriteHeader(http.StatusNotFound)
-			return
-		}
+		/* Skip */
 	} else if h.earlyDataHeaderName != "" {
-		if request.URL.Path != h.path {
-			writer.WriteHeader(http.StatusNotFound)
-			return
-		}
-		earlyDataStr := request.Header.Get(h.earlyDataHeaderName)
-		earlyData = base64.NewDecoder(base64.RawURLEncoding, bytes.NewReader([]byte(earlyDataStr)))
+		earlyDataStr = request.Header.Get(h.earlyDataHeaderName)
 	} else {
-		if strings.HasPrefix(request.URL.RequestURI(), h.path) {
-			earlyDataStr := request.URL.RequestURI()[len(h.path):]
-			earlyData = base64.NewDecoder(base64.RawURLEncoding, bytes.NewReader([]byte(earlyDataStr)))
-		} else {
-			writer.WriteHeader(http.StatusNotFound)
-			return
-		}
+		earlyDataStr = request.URL.RequestURI()[len(h.path):]
 	}
 
 	conn, err := upgrader.Upgrade(writer, request, nil)
@@ -78,10 +68,11 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
 			Port: int(0),
 		}
 	}
-	if earlyData == nil {
+	if earlyDataStr == "" {
 		h.ln.addConn(newConnection(conn, remoteAddr))
 	} else {
-		h.ln.addConn(newConnectionWithEarlyData(conn, remoteAddr, earlyData))
+		h.ln.addConn(newConnectionWithEarlyData(conn, remoteAddr,
+			/* earlyData */ base64.NewDecoder(base64.RawURLEncoding, bytes.NewReader([]byte(earlyDataStr)))))
 	}
 }
 
